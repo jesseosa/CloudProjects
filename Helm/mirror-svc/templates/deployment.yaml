@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mirror-svc.fullname" . }}
+  labels:
+    app: {{ include "mirror-svc.name" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "mirror-svc.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "mirror-svc.name" . }}
+    spec:
+      containers:
+        - name: mirror-svc
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          env:
+            - name: DATABASE_URL
+              value: {{ .Values.env.DATABASE_URL | quote }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}   # ephemeral for Minikube; replace with PVC for persistence

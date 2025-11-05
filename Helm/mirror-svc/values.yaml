@@ -1,0 +1,23 @@
+replicaCount: 1
+
+image:
+  repository: mirror-svc   # for Minikube: build/tag as mirror-svc:local
+  tag: local
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 4004
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: mirror.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []  # none for Minikube
+
+env:
+  DATABASE_URL: "sqlite:///./local.db"  # default; swap to Postgres URL if needed
