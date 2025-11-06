@@ -1,0 +1,103 @@
+# azure-pipelines.yml
+# Minimal CI/CD for Qashqade take-home (tests → build → push ACR)
+
+trigger:
+  branches:
+    include: [ main ]
+pr:
+  branches:
+    include: [ main ]
+
+# ----- Variables you set once in the UI or here -----
+variables:
+  pythonVersion: '3.12'
+  imageName: 'mirror-svc'
+  dockerfilePath: 'docker/Dockerfile'
+  # Create a Service Connection to your ACR in Project Settings → Service connections
+  acrServiceConnection: '<ACR_SERVICE_CONNECTION_NAME>'
+  acrLoginServer: '<youracr>.azurecr.io'
+
+# Keep agent free-tier friendly
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+
+# 1) TESTS
+- stage: Test
+  displayName: Run unit tests
+  jobs:
+  - job: pytest
+    timeoutInMinutes: 10
+    steps:
+    - checkout: self
+      fetchDepth: 1
+
+    # Cache pip to save minutes
+    - task: Cache@2
+      inputs:
+        key: 'pip | "$(Agent.OS)" | app/requirements.txt'
+        restoreKeys: 'pip | "$(Agent.OS)"'
+        path: $(Pipeline.Workspace)/pip
+      displayName: Cache pip
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+      displayName: Use Python $(pythonVersion)
+
+    - script: |
+        python -m pip install --upgrade pip
+        pip config set global.cache-dir "$(Pipeline.Workspace)/pip"
+        pip install -r app/requirements.txt
+        pytest -q
+      displayName: Install deps & run tests
+
+# 2) BUILD & PUSH (only if tests succeed)
+- stage: BuildPush
+  displayName: Build & push Docker image to ACR
+  dependsOn: Test
+  condition: succeeded()         # Gate on tests passing
+  jobs:
+  - job: dockerBuildPush
+    timeoutInMinutes: 15
+    steps:
+    - checkout: self
+      fetchDepth: 1
+
+    # Login to ACR via service connection (no secrets in pipeline)
+    - task: Docker@2
+      displayName: Login to ACR
+      inputs:
+        command: login
+        containerRegistry: $(acrServiceConnection)
+
+    # Build image and tag with commit SHA and 'latest'
+    - task: Docker@2
+      displayName: Build image
+      inputs:
+        repository: $(imageName)
+        command: build
+        Dockerfile: $(dockerfilePath)
+        buildContext: .
+        tags: |
+          $(Build.SourceVersion)
+          latest
+
+    # Push to ACR
+    - task: Docker@2
+      displayName: Push image
+      inputs:
+        repository: $(imageName)
+        command: push
+        tags: |
+          $(Build.SourceVersion)
+          latest
+
+    # Helpful output for Helm values
+    - script: |
+        echo "##vso[task.setvariable variable=fullImageTag]$(acrLoginServer)/$(imageName):$(Build.SourceVersion)"
+        echo "Pushed:"
+        echo " - $(acrLoginServer)/$(imageName):$(Build.SourceVersion)"
+        echo " - $(acrLoginServer)/$(imageName):latest"
+      displayName: Summarize image tags

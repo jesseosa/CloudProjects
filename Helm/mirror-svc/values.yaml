@@ -17,7 +17,7 @@ ingress:
       paths:
         - path: /
           pathType: Prefix
-  tls: []  # none for Minikube
+  tls: []  
 
 env:
-  DATABASE_URL: "sqlite:///./local.db"  # default; swap to Postgres URL if needed
+  DATABASE_URL: "sqlite:///./local.db"  
