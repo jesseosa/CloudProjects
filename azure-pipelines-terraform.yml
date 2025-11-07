@@ -1,27 +1,28 @@
 trigger:
-  branches: [ main ]
+  branches:
+    include:
+      - main
 pr:
-  branches: [ main ]
+  branches:
+    include:
+      - main
 
-# ====== EDIT THESE NAMES IN ONE PLACE ======
 variables:
-  projectName: 'qashqade-demo'     # used to derive resource names
+  projectName: 'qashqade-demo'
   location: 'eastus'
   terraformVersion: '1.6.6'
-  azureSubscription: 'Qashqade-Azure-Connection'  # Service connection name
+  azureSubscription: 'Qashqade-Azure-Connection'
 
-  # Backend config (must meet Azure naming rules)
   rgName: '$(projectName)-rg'
-  saNameRaw: '$(projectName)tfstate'      # 3–24 chars, lowercase letters/numbers only, no hyphens
+  saNameRaw: '$(projectName)tfstate'   # will be normalized to lowercase/no hyphens
   containerName: 'tfstate'
   stateKey: 'terraform.tfstate'
-# ==========================================
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: 'SelfHosted'
 
 stages:
-# 1) Bootstrap backend (RG + Storage + container) and run terraform plan
+# ---------- PLAN ----------
 - stage: Plan
   displayName: 'Terraform: Bootstrap + Plan'
   jobs:
@@ -31,7 +32,6 @@ stages:
     - checkout: self
       fetchDepth: 1
 
-    # Ensure terraform is available (Linux amd64)
     - script: |
         set -e
         curl -sSL -o tf.zip https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip
@@ -40,7 +40,6 @@ stages:
         terraform -version
       displayName: 'Install Terraform $(terraformVersion)'
 
-    # Normalize SA name (lowercase, strip hyphens) and create RG/SA/container idempotently
     - task: AzureCLI@2
       displayName: 'Bootstrap remote state resources'
       inputs:
@@ -49,10 +48,8 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           set -euo pipefail
-
           RG_NAME="$(rgName)"
           LOCATION="$(location)"
-          # normalize: lowercase and remove hyphens
           SA_NAME="$(echo '$(saNameRaw)' | tr '[:upper:]' '[:lower:]' | tr -d '-')"
           CONTAINER_NAME="$(containerName)"
 
@@ -60,7 +57,7 @@ stages:
           echo "SA_NAME=$SA_NAME"
           echo "CONTAINER_NAME=$CONTAINER_NAME"
 
-          az group create -n "$RG_NAME" -l "$LOCATION" 1>/dev/null
+          az group create -n "$RG_NAME" -l "$LOCATION" 1>/dev/null || true
 
           if ! az storage account show -n "$SA_NAME" -g "$RG_NAME" 1>/dev/null 2>&1; then
             az storage account create -n "$SA_NAME" -g "$RG_NAME" -l "$LOCATION" \
@@ -74,7 +71,6 @@ stages:
           echo "##vso[task.setvariable variable=BACKEND_SA]$SA_NAME"
           echo "##vso[task.setvariable variable=BACKEND_CONTAINER]$CONTAINER_NAME"
 
-    # Terraform fmt + validate + plan (using remote backend)
     - script: |
         set -euo pipefail
         cd terraform
@@ -98,7 +94,6 @@ stages:
         terraform show -no-color tfplan > tfplan.txt
       displayName: 'terraform init / fmt / validate / plan'
 
-    # Publish plan artifact for review
     - task: PublishBuildArtifacts@1
       displayName: 'Publish plan artifact'
       inputs:
@@ -106,28 +101,14 @@ stages:
         ArtifactName: 'tfplan'
         publishLocation: 'Container'
 
-# 2) Manual approval gate, then apply
+# ---------- APPLY (no approvals) ----------
 - stage: Apply
   displayName: 'Terraform: Apply'
   dependsOn: Plan
   condition: succeeded()
   jobs:
-  - job: approve
-    displayName: 'Manual approval'
-    steps:
-    - task: ManualValidation@0
-      inputs:
-        notifyUsers: ''          # optionally put reviewer emails here
-        instructions: |
-          Review the tfplan artifact (Artifacts tab → tfplan/tfplan.txt).
-          Approve to apply Terraform changes to Azure (RG/Storage/ACR, per your code).
-        onTimeout: 'reject'
-        timeout: '2d'
-
   - job: apply
     displayName: 'terraform apply'
-    dependsOn: approve
-    condition: succeeded()
     steps:
     - checkout: self
       fetchDepth: 1
@@ -150,17 +131,14 @@ stages:
           set -euo pipefail
           cd terraform
 
-          # Re-init (safe) against the same backend
           terraform init \
             -backend-config="resource_group_name=$(rgName)" \
             -backend-config="storage_account_name=$(echo '$(saNameRaw)' | tr '[:upper:]' '[:lower:]' | tr -d '-')" \
             -backend-config="container_name=$(containerName)" \
             -backend-config="key=$(stateKey)"
 
-          terraform plan -out=tfplan   # re-plan to be safe
+          terraform plan -out=tfplan
           terraform apply -auto-approve tfplan
 
-          # Print key outputs (if defined in outputs.tf)
           echo "---- Outputs ----"
           terraform output
-
