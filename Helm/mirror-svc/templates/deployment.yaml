@@ -19,25 +19,19 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - containerPort: {{ .Values.service.port }}
+            - containerPort: 4004
           env:
-            - name: DATABASE_URL
-              value: {{ .Values.env.DATABASE_URL | quote }}
-          readinessProbe:
-            httpGet:
-              path: /api/health
-              port: {{ .Values.service.port }}
-            initialDelaySeconds: 3
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /api/health
-              port: {{ .Values.service.port }}
-            initialDelaySeconds: 5
-            periodSeconds: 20
+            {{- range .Values.env }}
+            - name: {{ .name }}
+              value: "{{ .value }}"
+            {{- end }}
           volumeMounts:
-            - name: data
-              mountPath: /data
+            {{- range .Values.volumeMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+            {{- end }}
       volumes:
-        - name: data
-          emptyDir: {}   # ephemeral for Minikube; replace with PVC for persistence
+        {{- range .Values.volumes }}
+        - name: {{ .name }}
+          emptyDir: {}
+        {{- end }}
